@@ -1,0 +1,1 @@
+Add `vsphere.vm.snapshot.age` and `vsphere.vm.snapshot.size` property metrics.
