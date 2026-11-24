@@ -15,7 +15,7 @@ from pyVmomi import vim, vmodl
 
 from datadog_checks.base import AgentCheck, is_affirmative, to_string
 from datadog_checks.base.checks.libs.timer import Timer
-from datadog_checks.base.utils.time import get_current_datetime, get_timestamp
+from datadog_checks.base.utils.time import ensure_aware_datetime, get_current_datetime, get_timestamp
 from datadog_checks.vsphere.api import APIConnectionError, VSphereAPI
 from datadog_checks.vsphere.api_rest import VSphereRestAPI
 from datadog_checks.vsphere.cache import InfrastructureCache, MetricsMetadataCache
@@ -60,7 +60,9 @@ from datadog_checks.vsphere.utils import (
     is_metric_allowed_for_collection_type,
     is_metric_excluded_by_filters,
     is_resource_collected_by_filters,
+    iter_snapshot_nodes,
     should_collect_per_instance_values,
+    snapshot_size_bytes,
 )
 
 try:
@@ -1047,6 +1049,39 @@ class VSphereCheck(AgentCheck):
                         additional_tags=ip_tags,
                     )
 
+    def submit_snapshot_age_metric(
+        self,
+        snapshot_info: VmomiObject | None,
+        base_tags: list[str],
+        hostname: str,
+        resource_metric_suffix: str,
+    ) -> None:
+        """Submit the age in seconds of the VM's oldest snapshot. VMs without snapshots submit nothing."""
+        if snapshot_info is None or not snapshot_info.rootSnapshotList:
+            return
+
+        oldest_create_time = min(
+            ensure_aware_datetime(tree.createTime) for tree in iter_snapshot_nodes(snapshot_info.rootSnapshotList)
+        )
+        # Clock skew between the Agent and vCenter can put `createTime` in the future.
+        age = max((get_current_datetime() - oldest_create_time).total_seconds(), 0)
+        self.submit_property_metric('snapshot.age', age, base_tags, hostname, resource_metric_suffix)
+
+    def submit_snapshot_size_metric(
+        self,
+        layout: VmomiObject | None,
+        base_tags: list[str],
+        hostname: str,
+        resource_metric_suffix: str,
+    ) -> None:
+        """Submit the datastore bytes used by the VM's snapshots. VMs without snapshots submit nothing."""
+        if layout is None or not layout.snapshot:
+            return
+
+        self.submit_property_metric(
+            'snapshot.size', snapshot_size_bytes(layout), base_tags, hostname, resource_metric_suffix
+        )
+
     def submit_simple_property_metrics(
         self,
         all_properties,  # type: Dict[str, Any]
@@ -1107,6 +1142,16 @@ class VSphereCheck(AgentCheck):
             if disk_property in object_properties:
                 disks = all_properties.get(disk_property, [])
                 self.submit_disk_property_metrics(disks, base_tags, hostname, resource_metric_suffix)
+
+            snapshot_property = 'snapshot'
+            if snapshot_property in object_properties:
+                snapshot_info = all_properties.get(snapshot_property)
+                self.submit_snapshot_age_metric(snapshot_info, base_tags, hostname, resource_metric_suffix)
+
+            layout_property = 'layoutEx'
+            if layout_property in object_properties:
+                layout = all_properties.get(layout_property)
+                self.submit_snapshot_size_metric(layout, base_tags, hostname, resource_metric_suffix)
 
         self.submit_simple_property_metrics(all_properties, base_tags, hostname, resource_metric_suffix)
 

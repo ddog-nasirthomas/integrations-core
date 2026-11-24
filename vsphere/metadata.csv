@@ -309,6 +309,8 @@ vsphere.vm.guest.net.ipConfig.address,count,300,,,"Number of staticly assigned I
 vsphere.vm.guest.toolsRunningStatus,count,300,,,"Information about the current status of VMware Tools, tagged by `toolsstatus`. [Property Metric]",0,vsphere,vm tools status,,
 vsphere.vm.guest.toolsVersion,count,300,,,"Information about the current version of VMware Tools, tagged by `toolsversion`. [Property Metric]",0,vsphere,vm tools version,,
 vsphere.vm.guest.toolsVersionStatus2,count,300,,,"Information about the current version status of VMware Tools, tagged by `toolsversionstatus2`. [Property Metric]",0,vsphere,vm tools version status,,
+vsphere.vm.snapshot.age,gauge,300,second,,"Time elapsed since the creation of the oldest snapshot of the virtual machine, in seconds. Not submitted for virtual machines without snapshots. [Property Metric]",-1,vsphere,vm snapshot age,,
+vsphere.vm.snapshot.size,gauge,300,byte,,"Datastore space used by the snapshots of the virtual machine, in bytes: snapshot state and memory files plus delta disk extents. Not submitted for virtual machines without snapshots. [Property Metric]",-1,vsphere,vm snapshot size,,
 vsphere.vm.summary.config.memorySizeMB,gauge,300,megabyte,,"Memory size of the virtual machine, in MB. [Property Metric]",0,vsphere,vm memory size,,
 vsphere.vm.summary.config.numCpu,gauge,,core,,Number of processors present in this virtual machine.,0,vsphere,vm num cpu,,
 vsphere.vm.summary.config.numEthernetCards,gauge,300,,,Number of virtual network adapters. [Property Metric],0,vsphere,vm ethernet cards,,

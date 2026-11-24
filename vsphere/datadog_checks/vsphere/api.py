@@ -215,7 +215,9 @@ class VSphereAPI(object):
                 property_spec.pathSet.append(HOST_CPU_COUNT_PROPERTY)
 
             if self.config.collect_property_metrics:
-                properties = properties_to_collect(MOR_TYPE_AS_STRING.get(resource), self.config.metric_filters)
+                properties = properties_to_collect(
+                    MOR_TYPE_AS_STRING.get(resource), self.config.metric_filters, self.config.collect_vm_snapshot_size
+                )
                 for property in properties:
                     property_spec.pathSet.append(property)
 

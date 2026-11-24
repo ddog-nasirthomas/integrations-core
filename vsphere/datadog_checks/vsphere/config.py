@@ -100,6 +100,7 @@ class VSphereConfig(object):
         self.tags_prefix = instance.get("tags_prefix", DEFAULT_VSPHERE_TAG_PREFIX)
         self.should_collect_attributes = is_affirmative(instance.get("collect_attributes", False))
         self.collect_property_metrics = is_affirmative(instance.get("collect_property_metrics", False))
+        self.collect_vm_snapshot_size = is_affirmative(instance.get("collect_vm_snapshot_size", False))
         self.collect_vsan = is_affirmative(instance.get("collect_vsan_data", False))
         self.attr_prefix = instance.get("attributes_prefix", DEFAULT_VSPHERE_ATTR_PREFIX)
         self.excluded_host_tags = instance.get("excluded_host_tags", [])
@@ -313,7 +314,7 @@ class VSphereConfig(object):
     @property
     def object_properties_to_collect_by_mor(self):
         return {
-            mor_string: object_properties_to_collect(mor_string, self.metric_filters)
+            mor_string: object_properties_to_collect(mor_string, self.metric_filters, self.collect_vm_snapshot_size)
             for mor_string in OBJECT_PROPERTIES_BY_RESOURCE_TYPE.keys()
         }
 

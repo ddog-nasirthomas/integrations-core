@@ -1,0 +1,1 @@
+Add the `vsphere.vm.snapshot.age` property metric and the `vsphere.vm.snapshot.size` property metric, which is collected when the new `collect_vm_snapshot_size` option is enabled.

@@ -70,6 +70,8 @@ collect_property_metrics: true
 
 Property metrics are prefixed by the resource name. For example, host property metrics are prefixed with `vsphere.host.*`, and VM property metrics are prefixed with `vsphere.vm.*`. All property metrics have `[Property Metric]` in their description in the [metadata.csv][10].
 
+VM property metrics include `vsphere.vm.snapshot.age`, the age in seconds of the oldest snapshot. The datastore space in bytes used by the snapshot state, memory, and delta disk files, `vsphere.vm.snapshot.size`, is only collected when `collect_vm_snapshot_size` is also enabled, because it retrieves the file layout of every virtual machine. Both are only reported for powered-on virtual machines that have snapshots.
+
 ### Events
 
 This check watches vCenter's Event Manager for events and emits them to Datadog. The check defaults to emit the following event types:

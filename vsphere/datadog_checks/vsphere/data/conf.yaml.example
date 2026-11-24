@@ -389,10 +389,25 @@ instances:
     ##         Neither metric is collected for a resource whose hostname cannot be resolved, and the
     ##         vCPU count is not collected for a powered-off virtual machine.
     ##
+    ## Note3: `vsphere.vm.snapshot.age` reports the age of the oldest snapshot of each virtual machine.
+    ##         It is not collected for a virtual machine without snapshots or that is not powered on.
+    ##         See `collect_vm_snapshot_size` for `vsphere.vm.snapshot.size`.
+    ##
     ## Warning: Depending on the size of the vSphere environment, property metric collection can be slow,
     ## very CPU intensive and put pressure on the vCenter Server.
     #
     # collect_property_metrics: false
+
+    ## @param collect_vm_snapshot_size - boolean - optional - default: false
+    ## If true, and `collect_property_metrics` is enabled, the integration collects
+    ## `vsphere.vm.snapshot.size`, the datastore space used by the snapshots of each virtual machine.
+    ## This metric is not collected for a virtual machine without snapshots or that is not powered on.
+    ##
+    ## Warning: Collecting this metric retrieves the `layoutEx` property of every virtual machine,
+    ## which lists every file of the virtual machine and can be a large payload. Depending on the size of
+    ## the vSphere environment, it can put pressure on the vCenter Server.
+    #
+    # collect_vm_snapshot_size: false
 
     ## @param collect_vsan_data - boolean - optional - default: false
     ## If true, the integration will collect additional metrics and events about vSAN clusters, and hosts.
