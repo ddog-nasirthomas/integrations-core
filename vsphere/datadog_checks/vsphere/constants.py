@@ -92,7 +92,9 @@ PROPERTY_COUNT_METRICS = [
     "configuration.drsConfig.defaultVmBehavior",
     "configuration.dasConfig.enabled",
 ]
-VM_OBJECT_PROPERTIES = ["guest.disk", "guest.net", "guest.ipStack"]
+# `layoutEx` can be large; as an object property it is not requested when `metric_filters` excludes
+# `vm.snapshot.size`.
+VM_OBJECT_PROPERTIES = ["guest.disk", "guest.net", "guest.ipStack", "snapshot", "layoutEx"]
 
 VM_SIMPLE_PROPERTIES = [
     "guest.toolsRunningStatus",
@@ -156,6 +158,8 @@ OBJECT_PROPERTIES_TO_METRIC_NAME = {
     "guest.net": ["guest.net.ipConfig.address", "guest.net"],
     "guest.ipStack": ["guest.ipStack.ipRoute", "guest.ipStack"],
     "guest.disk": ["guest.disk.freeSpace", "guest.disk.capacity"],
+    "snapshot": ["snapshot.age"],
+    "layoutEx": ["snapshot.size"],
 }
 
 VM_OBJECT_PROPERTY_METRICS = [
@@ -165,6 +169,8 @@ VM_OBJECT_PROPERTY_METRICS = [
     "guest.ipStack",
     "guest.disk.freeSpace",
     "guest.disk.capacity",
+    "snapshot.age",
+    "snapshot.size",
 ]
 OBJECT_PROPERTIES_BY_RESOURCE_TYPE = {
     'vm': VM_OBJECT_PROPERTIES,

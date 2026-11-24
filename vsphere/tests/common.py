@@ -1,6 +1,7 @@
 # (C) Datadog, Inc. 2019-present
 # All rights reserved
 # Licensed under Simplified BSD License (see LICENSE)
+import datetime as dt
 import os
 import re
 from urllib.parse import urlparse
@@ -546,6 +547,60 @@ ip_stack_invalid2.ipRouteConfig = ip_route_config_invalid2
 IP_STACKS_INVALID2 = vim.ArrayOfAnyType()
 IP_STACKS_INVALID2.append(ip_stack_invalid2)
 
+# VM 1 snapshots: snapshot-1 (root) and its child snapshot-2, taken one day apart
+SNAPSHOT_INFO = vim.vm.SnapshotInfo(
+    rootSnapshotList=[
+        vim.vm.SnapshotTree(
+            snapshot=vim.vm.Snapshot(moId='snapshot-1'),
+            name='before-upgrade',
+            createTime=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            childSnapshotList=[
+                vim.vm.SnapshotTree(
+                    snapshot=vim.vm.Snapshot(moId='snapshot-2'),
+                    name='after-upgrade',
+                    createTime=dt.datetime(2024, 1, 2, tzinfo=dt.timezone.utc),
+                ),
+            ],
+        ),
+    ],
+)
+
+
+def _disk_layout(key, *chain):
+    return vim.vm.FileLayoutEx.DiskLayout(
+        key=key, chain=[vim.vm.FileLayoutEx.DiskUnit(fileKey=list(unit)) for unit in chain]
+    )
+
+
+# VM 1 file layout: disk 2000 chains its base disk (files 0, 1), the delta created by snapshot-1 (2, 3)
+# and the running delta created by snapshot-2 (4, 5). Snapshot files sum to 6300 bytes.
+LAYOUT_EX = vim.vm.FileLayoutEx(
+    file=[
+        vim.vm.FileLayoutEx.FileInfo(key=0, name='[ds1] vm1/vm1.vmdk', type='diskDescriptor', size=512),
+        vim.vm.FileLayoutEx.FileInfo(key=1, name='[ds1] vm1/vm1-flat.vmdk', type='diskExtent', size=10737418240),
+        vim.vm.FileLayoutEx.FileInfo(key=2, name='[ds1] vm1/vm1-000001.vmdk', type='diskDescriptor', size=400),
+        vim.vm.FileLayoutEx.FileInfo(key=3, name='[ds1] vm1/vm1-000001-delta.vmdk', type='diskExtent', size=3000),
+        vim.vm.FileLayoutEx.FileInfo(key=4, name='[ds1] vm1/vm1-000002.vmdk', type='diskDescriptor', size=400),
+        vim.vm.FileLayoutEx.FileInfo(key=5, name='[ds1] vm1/vm1-000002-delta.vmdk', type='diskExtent', size=2000),
+        vim.vm.FileLayoutEx.FileInfo(key=6, name='[ds1] vm1/vm1-Snapshot1.vmsn', type='snapshotData', size=100),
+        vim.vm.FileLayoutEx.FileInfo(key=7, name='[ds1] vm1/vm1-Snapshot2.vmsn', type='snapshotData', size=200),
+        vim.vm.FileLayoutEx.FileInfo(key=8, name='[ds1] vm1/vm1-Snapshot2.vmem', type='snapshotMemory', size=1000),
+        vim.vm.FileLayoutEx.FileInfo(key=9, name='[ds1] vm1/vm1.vmsd', type='snapshotList', size=50),
+    ],
+    disk=[_disk_layout(2000, [0, 1], [2, 3], [4, 5])],
+    snapshot=[
+        vim.vm.FileLayoutEx.SnapshotLayout(
+            key=vim.vm.Snapshot(moId='snapshot-1'), dataKey=6, memoryKey=-1, disk=[_disk_layout(2000, [0, 1])]
+        ),
+        vim.vm.FileLayoutEx.SnapshotLayout(
+            key=vim.vm.Snapshot(moId='snapshot-2'),
+            dataKey=7,
+            memoryKey=8,
+            disk=[_disk_layout(2000, [0, 1], [2, 3])],
+        ),
+    ],
+)
+
 VM_PROPERTIES_EX = mock.MagicMock(
     return_value=vim.PropertyCollector.RetrieveResult(
         objects=[
@@ -595,6 +650,14 @@ VM_PROPERTIES_EX = mock.MagicMock(
                     vmodl.DynamicProperty(
                         name='guest.ipStack',
                         val=IP_STACKS,
+                    ),
+                    vmodl.DynamicProperty(
+                        name='snapshot',
+                        val=SNAPSHOT_INFO,
+                    ),
+                    vmodl.DynamicProperty(
+                        name='layoutEx',
+                        val=LAYOUT_EX,
                     ),
                     vmodl.DynamicProperty(
                         name='guest.toolsVersion',

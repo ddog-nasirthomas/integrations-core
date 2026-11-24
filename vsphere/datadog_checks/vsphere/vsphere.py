@@ -9,13 +9,13 @@ import logging
 from collections import defaultdict
 from concurrent.futures import as_completed
 from concurrent.futures.thread import ThreadPoolExecutor
-from typing import Any, Callable, Dict, Generator, Iterable, List, Optional, Set, Type, cast  # noqa: F401
+from typing import Any, Callable, Dict, Generator, Iterable, Iterator, List, Optional, Set, Type, cast  # noqa: F401
 
 from pyVmomi import vim, vmodl
 
 from datadog_checks.base import AgentCheck, is_affirmative, to_string
 from datadog_checks.base.checks.libs.timer import Timer
-from datadog_checks.base.utils.time import get_current_datetime, get_timestamp
+from datadog_checks.base.utils.time import ensure_aware_datetime, get_current_datetime, get_timestamp
 from datadog_checks.vsphere.api import APIConnectionError, VSphereAPI
 from datadog_checks.vsphere.api_rest import VSphereRestAPI
 from datadog_checks.vsphere.cache import InfrastructureCache, MetricsMetadataCache
@@ -70,6 +70,55 @@ except ImportError:
 
 
 SERVICE_CHECK_NAME = 'can_connect'
+
+SNAPSHOT_FILE_TYPES = ('snapshotData', 'snapshotMemory')
+
+
+def iter_snapshot_trees(root_snapshot_list: Iterable[VmomiObject]) -> Iterator[VmomiObject]:
+    """Yield every node of a snapshot tree, walking `childSnapshotList` recursively."""
+    pending = list(root_snapshot_list)
+    while pending:
+        tree = pending.pop()
+        yield tree
+        pending.extend(tree.childSnapshotList or [])
+
+
+def snapshot_size_bytes(layout: VmomiObject) -> int:
+    """
+    Sum the sizes of the files backing a VM's snapshots, from its `layoutEx` property:
+    the snapshot state (`snapshotData`) and memory (`snapshotMemory`) files plus the delta disk extents.
+
+    Each `layoutEx.snapshot[].disk` chain lists the disk units the snapshot depends on, base disk included,
+    and chain ordering is not documented. Every snapshot chain of a disk contains that disk's chain at its
+    first snapshot, so the units shared by all of them are the base disk; every other unit of the snapshot
+    chains, and of the current chain in `layoutEx.disk`, is a delta created by a snapshot. Disks with no
+    snapshot chain were added after the last snapshot and have no delta. Files are counted once by key.
+    """
+    files_by_key = {file_info.key: file_info for file_info in layout.file or []}
+    counted_keys = {key for key, file_info in files_by_key.items() if file_info.type in SNAPSHOT_FILE_TYPES}
+
+    snapshot_chains_by_disk: dict[int, list[set[int]]] = defaultdict(list)
+    for snapshot_layout in layout.snapshot or []:
+        for disk_layout in snapshot_layout.disk or []:
+            snapshot_chains_by_disk[disk_layout.key].append(disk_chain_file_keys(disk_layout))
+
+    current_chains_by_disk: dict[int, set[int]] = {
+        disk_layout.key: disk_chain_file_keys(disk_layout) for disk_layout in layout.disk or []
+    }
+
+    for disk_key, snapshot_chains in snapshot_chains_by_disk.items():
+        base_keys = set.intersection(*snapshot_chains)
+        chain_keys = set.union(current_chains_by_disk.get(disk_key, set()), *snapshot_chains)
+        for key in chain_keys - base_keys:
+            file_info = files_by_key.get(key)
+            if file_info is not None and file_info.type == 'diskExtent':
+                counted_keys.add(key)
+
+    return sum(files_by_key[key].size or 0 for key in counted_keys)
+
+
+def disk_chain_file_keys(disk_layout: VmomiObject) -> set[int]:
+    return {key for disk_unit in disk_layout.chain or [] for key in disk_unit.fileKey or []}
 
 
 class VSphereCheck(AgentCheck):
@@ -1047,6 +1096,39 @@ class VSphereCheck(AgentCheck):
                         additional_tags=ip_tags,
                     )
 
+    def submit_snapshot_age_metric(
+        self,
+        snapshot_info: VmomiObject | None,
+        base_tags: list[str],
+        hostname: str,
+        resource_metric_suffix: str,
+    ) -> None:
+        """Submit the age in seconds of the VM's oldest snapshot. VMs without snapshots submit nothing."""
+        if snapshot_info is None or not snapshot_info.rootSnapshotList:
+            return
+
+        oldest_create_time = min(
+            ensure_aware_datetime(tree.createTime) for tree in iter_snapshot_trees(snapshot_info.rootSnapshotList)
+        )
+        # Clock skew between the Agent and vCenter can put `createTime` in the future.
+        age = max((get_current_datetime() - oldest_create_time).total_seconds(), 0)
+        self.submit_property_metric('snapshot.age', age, base_tags, hostname, resource_metric_suffix)
+
+    def submit_snapshot_size_metric(
+        self,
+        layout: VmomiObject | None,
+        base_tags: list[str],
+        hostname: str,
+        resource_metric_suffix: str,
+    ) -> None:
+        """Submit the datastore bytes used by the VM's snapshots. VMs without snapshots submit nothing."""
+        if layout is None or not layout.snapshot:
+            return
+
+        self.submit_property_metric(
+            'snapshot.size', snapshot_size_bytes(layout), base_tags, hostname, resource_metric_suffix
+        )
+
     def submit_simple_property_metrics(
         self,
         all_properties,  # type: Dict[str, Any]
@@ -1107,6 +1189,16 @@ class VSphereCheck(AgentCheck):
             if disk_property in object_properties:
                 disks = all_properties.get(disk_property, [])
                 self.submit_disk_property_metrics(disks, base_tags, hostname, resource_metric_suffix)
+
+            snapshot_property = 'snapshot'
+            if snapshot_property in object_properties:
+                snapshot_info = all_properties.get(snapshot_property)
+                self.submit_snapshot_age_metric(snapshot_info, base_tags, hostname, resource_metric_suffix)
+
+            layout_property = 'layoutEx'
+            if layout_property in object_properties:
+                layout = all_properties.get(layout_property)
+                self.submit_snapshot_size_metric(layout, base_tags, hostname, resource_metric_suffix)
 
         self.submit_simple_property_metrics(all_properties, base_tags, hostname, resource_metric_suffix)
 

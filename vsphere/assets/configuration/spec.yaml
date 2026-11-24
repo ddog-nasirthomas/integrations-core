@@ -471,6 +471,12 @@ files:
                   Neither metric is collected for a resource whose hostname cannot be resolved, and the
                   vCPU count is not collected for a powered-off virtual machine.
 
+          Note3: `vsphere.vm.snapshot.age` and `vsphere.vm.snapshot.size` report the age of the oldest
+                  snapshot and the datastore space used by the snapshots of each virtual machine. They are
+                  not collected for a virtual machine without snapshots or that is not powered on.
+                  Collecting `vsphere.vm.snapshot.size` retrieves the `layoutEx` property of every
+                  virtual machine, which can be large: exclude it with `metric_filters` if it is not needed.
+
           Warning: Depending on the size of the vSphere environment, property metric collection can be slow,
           very CPU intensive and put pressure on the vCenter Server.
         value:

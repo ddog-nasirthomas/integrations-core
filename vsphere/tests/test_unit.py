@@ -2,6 +2,7 @@
 # All rights reserved
 # Licensed under a 3-clause BSD style license (see LICENSE)
 import contextlib
+import datetime as dt
 import logging
 
 import pytest
@@ -2689,6 +2690,50 @@ def test_vm_property_metrics(aggregator, realtime_instance, dd_run_check, caplog
     # assert we still get VM performance counter metrics
     aggregator.assert_metric('vsphere.cpu.costop.sum', count=1, hostname='vm1')
     aggregator.assert_metric('vsphere.cpu.costop.sum', count=1, hostname='vm3')
+
+
+@pytest.mark.parametrize(
+    'now, expected_age',
+    [
+        pytest.param(dt.datetime(2024, 1, 3, tzinfo=dt.timezone.utc), 172800, id='since oldest snapshot'),
+        pytest.param(dt.datetime(2023, 12, 31, tzinfo=dt.timezone.utc), 0, id='clock skew clamped to zero'),
+    ],
+)
+def test_vm_snapshot_property_metrics(
+    aggregator, realtime_instance, dd_run_check, service_instance, vm_properties_ex, now, expected_age
+):
+    realtime_instance['collect_property_metrics'] = True
+    service_instance.content.propertyCollector.RetrievePropertiesEx = vm_properties_ex
+    base_tags_vm1 = ['vcenter_server:FAKE', 'vsphere_folder:unknown', 'vsphere_type:vm', 'vsphere_host:host1']
+
+    check = VSphereCheck('vsphere', {}, [realtime_instance])
+    with patch('datadog_checks.vsphere.vsphere.get_current_datetime', return_value=now):
+        dd_run_check(check)
+
+    aggregator.assert_metric('vsphere.vm.snapshot.age', count=1, value=expected_age, tags=base_tags_vm1, hostname='vm1')
+    # Snapshot state and memory files plus the two delta extents; the base disk and descriptors are excluded.
+    aggregator.assert_metric('vsphere.vm.snapshot.size', count=1, value=6300, tags=base_tags_vm1, hostname='vm1')
+    # vm3 has no snapshots.
+    aggregator.assert_metric('vsphere.vm.snapshot.age', count=0, hostname='vm3')
+    aggregator.assert_metric('vsphere.vm.snapshot.size', count=0, hostname='vm3')
+
+
+@pytest.mark.parametrize(
+    'vm_filters, expected_properties',
+    [
+        pytest.param(['vm.snapshot.age'], {'snapshot'}, id='age only'),
+        pytest.param(['vm.snapshot.size'], {'layoutEx'}, id='size only'),
+        pytest.param(['vm.guest.disk.freeSpace'], set(), id='neither'),
+    ],
+)
+def test_vm_snapshot_properties_follow_metric_filters(default_instance, vm_filters, expected_properties):
+    default_instance['collect_property_metrics'] = True
+    default_instance['metric_filters'] = {'vm': vm_filters}
+
+    check = VSphereCheck('vsphere', {}, [default_instance])
+
+    object_properties = set(check._config.object_properties_to_collect_by_mor['vm'])
+    assert object_properties & {'snapshot', 'layoutEx'} == expected_properties
 
 
 def test_host_property_metrics(aggregator, realtime_instance, dd_run_check, caplog, service_instance, vm_properties_ex):
