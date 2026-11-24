@@ -36,6 +36,10 @@ def instance_collect_tags():
     return False
 
 
+def instance_collect_vm_snapshot_size():
+    return False
+
+
 def instance_collect_vsan_data():
     return False
 

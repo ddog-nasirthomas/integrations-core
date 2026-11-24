@@ -13,13 +13,16 @@ from datadog_checks.base import AgentCheck, ConfigurationError
 from datadog_checks.base.utils.time import get_current_datetime
 from datadog_checks.vsphere import VSphereCheck
 from datadog_checks.vsphere.constants import DEFAULT_MAX_QUERY_METRICS, PROPERTY_METRICS_BY_RESOURCE_TYPE
+from datadog_checks.vsphere.utils import snapshot_size_bytes
 
 from .common import (
     EVENTS,
     HISTORICAL_INSTANCE,
+    LAYOUT_EX,
     PROPERTIES_EX_VM_OFF,
     REALTIME_INSTANCE,
     VSPHERE_VERSION,
+    disk_layout,
 )
 
 pytestmark = [pytest.mark.unit]
@@ -2699,7 +2702,7 @@ def test_vm_property_metrics(aggregator, realtime_instance, dd_run_check, caplog
         pytest.param(dt.datetime(2023, 12, 31, tzinfo=dt.timezone.utc), 0, id='clock skew clamped to zero'),
     ],
 )
-def test_vm_snapshot_property_metrics(
+def test_vm_snapshot_age_metric(
     aggregator, realtime_instance, dd_run_check, service_instance, vm_properties_ex, now, expected_age
 ):
     realtime_instance['collect_property_metrics'] = True
@@ -2711,24 +2714,108 @@ def test_vm_snapshot_property_metrics(
         dd_run_check(check)
 
     aggregator.assert_metric('vsphere.vm.snapshot.age', count=1, value=expected_age, tags=base_tags_vm1, hostname='vm1')
-    # Snapshot state and memory files plus the two delta extents; the base disk and descriptors are excluded.
-    aggregator.assert_metric('vsphere.vm.snapshot.size', count=1, value=6300, tags=base_tags_vm1, hostname='vm1')
-    # vm3 has no snapshots.
     aggregator.assert_metric('vsphere.vm.snapshot.age', count=0, hostname='vm3')
+
+
+def test_vm_snapshot_size_metric(aggregator, realtime_instance, dd_run_check, service_instance, vm_properties_ex):
+    realtime_instance['collect_property_metrics'] = True
+    realtime_instance['collect_vm_snapshot_size'] = True
+    service_instance.content.propertyCollector.RetrievePropertiesEx = vm_properties_ex
+    base_tags_vm1 = ['vcenter_server:FAKE', 'vsphere_folder:unknown', 'vsphere_type:vm', 'vsphere_host:host1']
+
+    check = VSphereCheck('vsphere', {}, [realtime_instance])
+    dd_run_check(check)
+
+    aggregator.assert_metric('vsphere.vm.snapshot.size', count=1, value=6300, tags=base_tags_vm1, hostname='vm1')
+    # vm3 has a file layout but no snapshot.
     aggregator.assert_metric('vsphere.vm.snapshot.size', count=0, hostname='vm3')
 
 
+def _snapshot_layout(snapshot_id, data_key, memory_key, *disks):
+    return vim.vm.FileLayoutEx.SnapshotLayout(
+        key=vim.vm.Snapshot(moId=snapshot_id), dataKey=data_key, memoryKey=memory_key, disk=list(disks)
+    )
+
+
+def _file(key, file_type, size):
+    return vim.vm.FileLayoutEx.FileInfo(key=key, name='[ds1] vm1/file-{}'.format(key), type=file_type, size=size)
+
+
 @pytest.mark.parametrize(
-    'vm_filters, expected_properties',
+    'layout, expected_size',
     [
-        pytest.param(['vm.snapshot.age'], {'snapshot'}, id='age only'),
-        pytest.param(['vm.snapshot.size'], {'layoutEx'}, id='size only'),
-        pytest.param(['vm.guest.disk.freeSpace'], set(), id='neither'),
+        pytest.param(LAYOUT_EX, 6300, id='linear chain'),
+        pytest.param(
+            # Two snapshots whose chains diverge from the same base disk after a revert.
+            vim.vm.FileLayoutEx(
+                file=[
+                    _file(0, 'diskExtent', 10000),
+                    _file(1, 'diskExtent', 300),
+                    _file(2, 'diskExtent', 500),
+                    _file(3, 'diskExtent', 700),
+                    _file(4, 'snapshotData', 10),
+                    _file(5, 'snapshotData', 20),
+                ],
+                disk=[disk_layout(2000, [0], [3])],
+                snapshot=[
+                    _snapshot_layout('snapshot-1', 4, -1, disk_layout(2000, [0], [1])),
+                    _snapshot_layout('snapshot-2', 5, -1, disk_layout(2000, [0], [2])),
+                ],
+            ),
+            1530,
+            id='branched tree counts every delta once',
+        ),
+        pytest.param(
+            # disk 2001 was added after the only snapshot, so it has no snapshot chain.
+            vim.vm.FileLayoutEx(
+                file=[
+                    _file(0, 'diskExtent', 10000),
+                    _file(1, 'diskExtent', 300),
+                    _file(2, 'diskExtent', 99999),
+                    _file(3, 'snapshotData', 10),
+                ],
+                disk=[disk_layout(2000, [0], [1]), disk_layout(2001, [2])],
+                snapshot=[_snapshot_layout('snapshot-1', 3, -1, disk_layout(2000, [0]))],
+            ),
+            310,
+            id='disk added after snapshot ignored',
+        ),
+        pytest.param(
+            vim.vm.FileLayoutEx(
+                file=[_file(0, 'diskExtent', 10000), _file(1, 'diskExtent', 300), _file(2, 'snapshotData', 10)],
+                disk=[disk_layout(2000, [0], [1])],
+                snapshot=[_snapshot_layout('snapshot-1', 2, -1, disk_layout(2000, [0]))],
+            ),
+            310,
+            id='no memory file',
+        ),
+        pytest.param(
+            vim.vm.FileLayoutEx(file=[_file(0, 'diskExtent', 10000)], disk=[disk_layout(2000, [0])], snapshot=[]),
+            0,
+            id='no snapshot',
+        ),
     ],
 )
-def test_vm_snapshot_properties_follow_metric_filters(default_instance, vm_filters, expected_properties):
+def test_snapshot_size_bytes(layout, expected_size):
+    assert snapshot_size_bytes(layout) == expected_size
+
+
+@pytest.mark.parametrize(
+    'collect_vm_snapshot_size, vm_filters, expected_properties',
+    [
+        pytest.param(True, [], {'snapshot', 'layoutEx'}, id='size enabled, no filters'),
+        pytest.param(False, [], {'snapshot'}, id='size not enabled, no filters'),
+        pytest.param(True, ['vm.snapshot.age'], {'snapshot'}, id='age only'),
+        pytest.param(True, ['vm.snapshot.size'], {'layoutEx'}, id='size only'),
+        pytest.param(False, ['vm.snapshot.size'], set(), id='size filtered in but not enabled'),
+        pytest.param(True, ['vm.guest.disk.freeSpace'], set(), id='neither'),
+    ],
+)
+def test_vm_snapshot_properties_collected(default_instance, collect_vm_snapshot_size, vm_filters, expected_properties):
     default_instance['collect_property_metrics'] = True
-    default_instance['metric_filters'] = {'vm': vm_filters}
+    default_instance['collect_vm_snapshot_size'] = collect_vm_snapshot_size
+    if vm_filters:
+        default_instance['metric_filters'] = {'vm': vm_filters}
 
     check = VSphereCheck('vsphere', {}, [default_instance])
 

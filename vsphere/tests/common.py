@@ -566,7 +566,7 @@ SNAPSHOT_INFO = vim.vm.SnapshotInfo(
 )
 
 
-def _disk_layout(key, *chain):
+def disk_layout(key, *chain):
     return vim.vm.FileLayoutEx.DiskLayout(
         key=key, chain=[vim.vm.FileLayoutEx.DiskUnit(fileKey=list(unit)) for unit in chain]
     )
@@ -587,16 +587,16 @@ LAYOUT_EX = vim.vm.FileLayoutEx(
         vim.vm.FileLayoutEx.FileInfo(key=8, name='[ds1] vm1/vm1-Snapshot2.vmem', type='snapshotMemory', size=1000),
         vim.vm.FileLayoutEx.FileInfo(key=9, name='[ds1] vm1/vm1.vmsd', type='snapshotList', size=50),
     ],
-    disk=[_disk_layout(2000, [0, 1], [2, 3], [4, 5])],
+    disk=[disk_layout(2000, [0, 1], [2, 3], [4, 5])],
     snapshot=[
         vim.vm.FileLayoutEx.SnapshotLayout(
-            key=vim.vm.Snapshot(moId='snapshot-1'), dataKey=6, memoryKey=-1, disk=[_disk_layout(2000, [0, 1])]
+            key=vim.vm.Snapshot(moId='snapshot-1'), dataKey=6, memoryKey=-1, disk=[disk_layout(2000, [0, 1])]
         ),
         vim.vm.FileLayoutEx.SnapshotLayout(
             key=vim.vm.Snapshot(moId='snapshot-2'),
             dataKey=7,
             memoryKey=8,
-            disk=[_disk_layout(2000, [0, 1], [2, 3])],
+            disk=[disk_layout(2000, [0, 1], [2, 3])],
         ),
     ],
 )
@@ -703,6 +703,14 @@ VM_PROPERTIES_EX = mock.MagicMock(
                     vmodl.DynamicProperty(
                         name='runtime.powerState',
                         val=vim.VirtualMachinePowerState.poweredOn,
+                    ),
+                    # Most real VMs have a file layout and no snapshot.
+                    vmodl.DynamicProperty(
+                        name='layoutEx',
+                        val=vim.vm.FileLayoutEx(
+                            file=[vim.vm.FileLayoutEx.FileInfo(key=0, type='diskExtent', size=100)],
+                            snapshot=[],
+                        ),
                     ),
                     vmodl.DynamicProperty(
                         name='summary.config.numCpu',

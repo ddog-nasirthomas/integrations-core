@@ -92,9 +92,12 @@ PROPERTY_COUNT_METRICS = [
     "configuration.drsConfig.defaultVmBehavior",
     "configuration.dasConfig.enabled",
 ]
-# `layoutEx` can be large; as an object property it is not requested when `metric_filters` excludes
-# `vm.snapshot.size`.
+# `layoutEx` can be large; it is only requested when `collect_vm_snapshot_size` is enabled and
+# `metric_filters` keeps `vm.snapshot.size`.
 VM_OBJECT_PROPERTIES = ["guest.disk", "guest.net", "guest.ipStack", "snapshot", "layoutEx"]
+
+# `layoutEx` file types whose full size counts toward `vsphere.vm.snapshot.size`.
+SNAPSHOT_FILE_TYPES = ('snapshotData', 'snapshotMemory')
 
 VM_SIMPLE_PROPERTIES = [
     "guest.toolsRunningStatus",

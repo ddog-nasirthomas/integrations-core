@@ -1,7 +1,8 @@
 # (C) Datadog, Inc. 2019-present
 # All rights reserved
 # Licensed under Simplified BSD License (see LICENSE)
-from typing import Any, Dict, List, Optional, Type  # noqa: F401
+from collections import defaultdict
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Type  # noqa: F401
 
 from pyVmomi import vim
 
@@ -18,6 +19,7 @@ from datadog_checks.vsphere.constants import (
     REFERENCE_METRIC,
     SHORT_ROLLUP,
     SIMPLE_PROPERTIES_BY_RESOURCE_TYPE,
+    SNAPSHOT_FILE_TYPES,
 )
 from datadog_checks.vsphere.metrics import ALLOWED_METRICS_FOR_MOR
 from datadog_checks.vsphere.resource_filters import ResourceFilter, match_any_regex  # noqa: F401
@@ -254,3 +256,61 @@ def add_additional_tags(tags, additional_tags):
     for tag_name, tag_value in additional_tags.items():
         if tag_value is not None:
             tags.append("{}:{}".format(tag_name, tag_value))
+
+
+def iter_snapshot_nodes(root_snapshot_list):
+    # type: (Iterable[Any]) -> Iterator[Any]
+    """Yield every node of a snapshot tree, walking `childSnapshotList` recursively."""
+    pending = list(root_snapshot_list)
+    while pending:
+        node = pending.pop()
+        yield node
+        pending.extend(node.childSnapshotList or [])
+
+
+def disk_chain_file_keys(disk_layout):
+    # type: (Any) -> set[int]
+    """Return the keys of all the files in the chain of a `layoutEx` disk layout."""
+    return {key for disk_unit in disk_layout.chain or [] for key in disk_unit.fileKey or []}
+
+
+def snapshot_delta_extent_keys(layout):
+    # type: (Any) -> set[int]
+    """
+    Return the keys of the delta disk extents created by snapshots, from a `layoutEx` property.
+
+    Each `layoutEx.snapshot[].disk` chain lists the disk units the snapshot depends on, base disk included,
+    and chain ordering is not documented. Every snapshot chain of a disk contains that disk's chain at its
+    first snapshot, so the units shared by all of them are the base disk; every other unit of the snapshot
+    chains, and of the current chain in `layoutEx.disk`, is a delta created by a snapshot. Disks with no
+    snapshot chain were added after the last snapshot and have no delta.
+    """
+    snapshot_chains_by_disk = defaultdict(list)  # type: Dict[int, List[set[int]]]
+    for snapshot_layout in layout.snapshot or []:
+        for disk_layout in snapshot_layout.disk or []:
+            snapshot_chains_by_disk[disk_layout.key].append(disk_chain_file_keys(disk_layout))
+
+    current_chains_by_disk = {disk_layout.key: disk_chain_file_keys(disk_layout) for disk_layout in layout.disk or []}  # type: Dict[int, set[int]]
+
+    delta_keys = set()  # type: set[int]
+    for disk_key, snapshot_chains in snapshot_chains_by_disk.items():
+        base_keys = set.intersection(*snapshot_chains)
+        chain_keys = set.union(current_chains_by_disk.get(disk_key, set()), *snapshot_chains)
+        delta_keys |= chain_keys - base_keys
+    return delta_keys
+
+
+def snapshot_size_bytes(layout):
+    # type: (Any) -> int
+    """
+    Sum the sizes of the files backing a VM's snapshots, from its `layoutEx` property: the snapshot state and
+    memory files plus the delta disk extents. Each file is counted once, by key.
+    """
+    files_by_key = {file_info.key: file_info for file_info in layout.file or []}
+    counted_keys = {key for key, file_info in files_by_key.items() if file_info.type in SNAPSHOT_FILE_TYPES}
+    counted_keys |= {
+        key
+        for key in snapshot_delta_extent_keys(layout)
+        if key in files_by_key and files_by_key[key].type == 'diskExtent'
+    }
+    return sum(files_by_key[key].size or 0 for key in counted_keys)
