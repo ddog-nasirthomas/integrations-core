@@ -94,7 +94,8 @@ PROPERTY_COUNT_METRICS = [
 ]
 # `layoutEx` can be large; it is only requested when `collect_vm_snapshot_size` is enabled and
 # `metric_filters` keeps `vm.snapshot.size`.
-VM_OBJECT_PROPERTIES = ["guest.disk", "guest.net", "guest.ipStack", "snapshot", "layoutEx"]
+VM_SNAPSHOT_SIZE_PROPERTY = "layoutEx"
+VM_OBJECT_PROPERTIES = ["guest.disk", "guest.net", "guest.ipStack", "snapshot", VM_SNAPSHOT_SIZE_PROPERTY]
 
 # `layoutEx` file types whose full size counts toward `vsphere.vm.snapshot.size`.
 SNAPSHOT_FILE_TYPES = ('snapshotData', 'snapshotMemory')

@@ -20,6 +20,7 @@ from datadog_checks.vsphere.constants import (
     SHORT_ROLLUP,
     SIMPLE_PROPERTIES_BY_RESOURCE_TYPE,
     SNAPSHOT_FILE_TYPES,
+    VM_SNAPSHOT_SIZE_PROPERTY,
 )
 from datadog_checks.vsphere.metrics import ALLOWED_METRICS_FOR_MOR
 from datadog_checks.vsphere.resource_filters import ResourceFilter, match_any_regex  # noqa: F401
@@ -126,13 +127,13 @@ def property_metrics_to_collect(mor_type, metric_filters):
     return metrics_to_collect
 
 
-def properties_to_collect(mor_type, metric_filters):
-    # type: (Optional[str], MetricFilters) -> List[str]
+def properties_to_collect(mor_type, metric_filters, collect_vm_snapshot_size=False):
+    # type: (Optional[str], MetricFilters, bool) -> List[str]
     if mor_type is None:
         return []
 
     resource_simple_properties = simple_properties_to_collect(mor_type, metric_filters)
-    resource_object_properties = object_properties_to_collect(mor_type, metric_filters)
+    resource_object_properties = object_properties_to_collect(mor_type, metric_filters, collect_vm_snapshot_size)
 
     return resource_simple_properties + resource_object_properties
 
@@ -159,10 +160,13 @@ def simple_properties_to_collect(mor_string, resource_filters):
     return all_properties
 
 
-def object_properties_to_collect(mor_string, resource_filters):
-    # type: (str, MetricFilters) -> List[str]
+def object_properties_to_collect(mor_string, resource_filters, collect_vm_snapshot_size=False):
+    # type: (str, MetricFilters, bool) -> List[str]
     filters = resource_filters.get(mor_string)
     resource_object_properties = OBJECT_PROPERTIES_BY_RESOURCE_TYPE.get(mor_string, [])
+    if not collect_vm_snapshot_size:
+        # `layoutEx` is large, so it is only requested when explicitly enabled.
+        resource_object_properties = [prop for prop in resource_object_properties if prop != VM_SNAPSHOT_SIZE_PROPERTY]
 
     if not filters:
         return resource_object_properties
@@ -274,6 +278,12 @@ def disk_chain_file_keys(disk_layout):
     return {key for disk_unit in disk_layout.chain or [] for key in disk_unit.fileKey or []}
 
 
+def disk_chains(disk_layouts):
+    # type: (Optional[Iterable[Any]]) -> Dict[int, set[int]]
+    """Map each disk key of a list of `layoutEx` disk layouts to the keys of the files in its chain."""
+    return {disk_layout.key: disk_chain_file_keys(disk_layout) for disk_layout in disk_layouts or []}
+
+
 def snapshot_delta_extent_keys(layout):
     # type: (Any) -> set[int]
     """
@@ -287,10 +297,10 @@ def snapshot_delta_extent_keys(layout):
     """
     snapshot_chains_by_disk = defaultdict(list)  # type: Dict[int, List[set[int]]]
     for snapshot_layout in layout.snapshot or []:
-        for disk_layout in snapshot_layout.disk or []:
-            snapshot_chains_by_disk[disk_layout.key].append(disk_chain_file_keys(disk_layout))
+        for disk_key, chain in disk_chains(snapshot_layout.disk).items():
+            snapshot_chains_by_disk[disk_key].append(chain)
 
-    current_chains_by_disk = {disk_layout.key: disk_chain_file_keys(disk_layout) for disk_layout in layout.disk or []}  # type: Dict[int, set[int]]
+    current_chains_by_disk = disk_chains(layout.disk)
 
     delta_keys = set()  # type: set[int]
     for disk_key, snapshot_chains in snapshot_chains_by_disk.items():

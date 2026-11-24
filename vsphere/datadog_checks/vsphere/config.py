@@ -313,14 +313,10 @@ class VSphereConfig(object):
 
     @property
     def object_properties_to_collect_by_mor(self):
-        properties_by_mor = {
-            mor_string: object_properties_to_collect(mor_string, self.metric_filters)
+        return {
+            mor_string: object_properties_to_collect(mor_string, self.metric_filters, self.collect_vm_snapshot_size)
             for mor_string in OBJECT_PROPERTIES_BY_RESOURCE_TYPE.keys()
         }
-        if not self.collect_vm_snapshot_size:
-            # `layoutEx` is large, so it is only requested when explicitly enabled.
-            properties_by_mor['vm'] = [prop for prop in properties_by_mor['vm'] if prop != 'layoutEx']
-        return properties_by_mor
 
     @property
     def simple_properties_to_collect_by_mor(self):

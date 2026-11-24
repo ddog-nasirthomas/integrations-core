@@ -23,6 +23,8 @@ from .common import (
     REALTIME_INSTANCE,
     VSPHERE_VERSION,
     disk_layout,
+    file_info,
+    snapshot_layout,
 )
 
 pytestmark = [pytest.mark.unit]
@@ -2715,6 +2717,8 @@ def test_vm_snapshot_age_metric(
 
     aggregator.assert_metric('vsphere.vm.snapshot.age', count=1, value=expected_age, tags=base_tags_vm1, hostname='vm1')
     aggregator.assert_metric('vsphere.vm.snapshot.age', count=0, hostname='vm3')
+    # `collect_vm_snapshot_size` is not enabled.
+    aggregator.assert_metric('vsphere.vm.snapshot.size', count=0)
 
 
 def test_vm_snapshot_size_metric(aggregator, realtime_instance, dd_run_check, service_instance, vm_properties_ex):
@@ -2731,16 +2735,6 @@ def test_vm_snapshot_size_metric(aggregator, realtime_instance, dd_run_check, se
     aggregator.assert_metric('vsphere.vm.snapshot.size', count=0, hostname='vm3')
 
 
-def _snapshot_layout(snapshot_id, data_key, memory_key, *disks):
-    return vim.vm.FileLayoutEx.SnapshotLayout(
-        key=vim.vm.Snapshot(moId=snapshot_id), dataKey=data_key, memoryKey=memory_key, disk=list(disks)
-    )
-
-
-def _file(key, file_type, size):
-    return vim.vm.FileLayoutEx.FileInfo(key=key, name='[ds1] vm1/file-{}'.format(key), type=file_type, size=size)
-
-
 @pytest.mark.parametrize(
     'layout, expected_size',
     [
@@ -2749,48 +2743,72 @@ def _file(key, file_type, size):
             # Two snapshots whose chains diverge from the same base disk after a revert.
             vim.vm.FileLayoutEx(
                 file=[
-                    _file(0, 'diskExtent', 10000),
-                    _file(1, 'diskExtent', 300),
-                    _file(2, 'diskExtent', 500),
-                    _file(3, 'diskExtent', 700),
-                    _file(4, 'snapshotData', 10),
-                    _file(5, 'snapshotData', 20),
+                    file_info(0, 'diskExtent', 10000),
+                    file_info(1, 'diskExtent', 300),
+                    file_info(2, 'diskExtent', 500),
+                    file_info(3, 'diskExtent', 700),
+                    file_info(4, 'snapshotData', 10),
+                    file_info(5, 'snapshotData', 20),
                 ],
                 disk=[disk_layout(2000, [0], [3])],
                 snapshot=[
-                    _snapshot_layout('snapshot-1', 4, -1, disk_layout(2000, [0], [1])),
-                    _snapshot_layout('snapshot-2', 5, -1, disk_layout(2000, [0], [2])),
+                    snapshot_layout('snapshot-1', 4, -1, disk_layout(2000, [0], [1])),
+                    snapshot_layout('snapshot-2', 5, -1, disk_layout(2000, [0], [2])),
                 ],
             ),
             1530,
             id='branched tree counts every delta once',
         ),
         pytest.param(
+            # disk 2001 is attached between the two snapshots, so only snapshot-2 has a chain for it.
+            vim.vm.FileLayoutEx(
+                file=[
+                    file_info(0, 'diskExtent', 10000),
+                    file_info(1, 'diskExtent', 300),
+                    file_info(2, 'diskExtent', 5000),
+                    file_info(3, 'diskExtent', 40),
+                    file_info(4, 'snapshotData', 10),
+                    file_info(5, 'snapshotData', 20),
+                ],
+                disk=[disk_layout(2000, [0], [1]), disk_layout(2001, [2], [3])],
+                snapshot=[
+                    snapshot_layout('snapshot-1', 4, -1, disk_layout(2000, [0])),
+                    snapshot_layout('snapshot-2', 5, -1, disk_layout(2000, [0]), disk_layout(2001, [2])),
+                ],
+            ),
+            370,
+            id='disk added between snapshots counts only its delta',
+        ),
+        pytest.param(
             # disk 2001 was added after the only snapshot, so it has no snapshot chain.
             vim.vm.FileLayoutEx(
                 file=[
-                    _file(0, 'diskExtent', 10000),
-                    _file(1, 'diskExtent', 300),
-                    _file(2, 'diskExtent', 99999),
-                    _file(3, 'snapshotData', 10),
+                    file_info(0, 'diskExtent', 10000),
+                    file_info(1, 'diskExtent', 300),
+                    file_info(2, 'diskExtent', 99999),
+                    file_info(3, 'snapshotData', 10),
                 ],
                 disk=[disk_layout(2000, [0], [1]), disk_layout(2001, [2])],
-                snapshot=[_snapshot_layout('snapshot-1', 3, -1, disk_layout(2000, [0]))],
+                snapshot=[snapshot_layout('snapshot-1', 3, -1, disk_layout(2000, [0]))],
             ),
             310,
             id='disk added after snapshot ignored',
         ),
         pytest.param(
             vim.vm.FileLayoutEx(
-                file=[_file(0, 'diskExtent', 10000), _file(1, 'diskExtent', 300), _file(2, 'snapshotData', 10)],
+                file=[
+                    file_info(0, 'diskExtent', 10000),
+                    file_info(1, 'diskExtent', 300),
+                    file_info(2, 'snapshotData', 10),
+                ],
                 disk=[disk_layout(2000, [0], [1])],
-                snapshot=[_snapshot_layout('snapshot-1', 2, -1, disk_layout(2000, [0]))],
+                snapshot=[snapshot_layout('snapshot-1', 2, -1, disk_layout(2000, [0]))],
             ),
             310,
             id='no memory file',
         ),
         pytest.param(
-            vim.vm.FileLayoutEx(file=[_file(0, 'diskExtent', 10000)], disk=[disk_layout(2000, [0])], snapshot=[]),
+            vim.vm.FileLayoutEx(file=[file_info(0, 'diskExtent', 10000)], disk=[disk_layout(2000, [0])], snapshot=[]),
             0,
             id='no snapshot',
         ),
@@ -2811,16 +2829,35 @@ def test_snapshot_size_bytes(layout, expected_size):
         pytest.param(True, ['vm.guest.disk.freeSpace'], set(), id='neither'),
     ],
 )
-def test_vm_snapshot_properties_collected(default_instance, collect_vm_snapshot_size, vm_filters, expected_properties):
-    default_instance['collect_property_metrics'] = True
-    default_instance['collect_vm_snapshot_size'] = collect_vm_snapshot_size
+def test_vm_snapshot_properties_requested(
+    dd_run_check,
+    realtime_instance,
+    service_instance,
+    vm_properties_ex,
+    collect_vm_snapshot_size,
+    vm_filters,
+    expected_properties,
+):
+    realtime_instance['collect_property_metrics'] = True
+    realtime_instance['collect_vm_snapshot_size'] = collect_vm_snapshot_size
     if vm_filters:
-        default_instance['metric_filters'] = {'vm': vm_filters}
+        realtime_instance['metric_filters'] = {'vm': vm_filters}
+    # `vm_properties_ex` is shared by all tests, so use a fresh mock to only see this run's requests.
+    retrieve_properties_ex = MagicMock(return_value=vm_properties_ex.return_value)
+    service_instance.content.propertyCollector.RetrievePropertiesEx = retrieve_properties_ex
 
-    check = VSphereCheck('vsphere', {}, [default_instance])
+    dd_run_check(VSphereCheck('vsphere', {}, [realtime_instance]))
 
-    object_properties = set(check._config.object_properties_to_collect_by_mor['vm'])
-    assert object_properties & {'snapshot', 'layoutEx'} == expected_properties
+    # The properties asked of vCenter are what costs; the submit path only drops what was fetched.
+    requested_paths = {
+        path
+        for call in retrieve_properties_ex.call_args_list
+        for filter_spec in call.args[0]
+        for prop_spec in filter_spec.propSet
+        if prop_spec.type == vim.VirtualMachine
+        for path in prop_spec.pathSet
+    }
+    assert requested_paths & {'snapshot', 'layoutEx'} == expected_properties
 
 
 def test_host_property_metrics(aggregator, realtime_instance, dd_run_check, caplog, service_instance, vm_properties_ex):

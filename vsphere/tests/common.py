@@ -572,6 +572,16 @@ def disk_layout(key, *chain):
     )
 
 
+def snapshot_layout(snapshot_id, data_key, memory_key, *disks):
+    return vim.vm.FileLayoutEx.SnapshotLayout(
+        key=vim.vm.Snapshot(moId=snapshot_id), dataKey=data_key, memoryKey=memory_key, disk=list(disks)
+    )
+
+
+def file_info(key, file_type, size):
+    return vim.vm.FileLayoutEx.FileInfo(key=key, name=f'[ds1] vm1/file-{key}', type=file_type, size=size)
+
+
 # VM 1 file layout: disk 2000 chains its base disk (files 0, 1), the delta created by snapshot-1 (2, 3)
 # and the running delta created by snapshot-2 (4, 5). Snapshot files sum to 6300 bytes.
 LAYOUT_EX = vim.vm.FileLayoutEx(
